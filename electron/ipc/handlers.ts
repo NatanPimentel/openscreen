@@ -27,6 +27,7 @@ import {
 import type { CliSourcesResult } from "../../src/lib/cliContracts";
 import { pickRecordingSource } from "../../src/lib/cliSourcePick";
 import {
+	type NativeLinuxCaptureSource,
 	type NativeLinuxRecordingRequest,
 	portalCursorMode,
 } from "../../src/lib/nativeLinuxRecording";
@@ -2091,9 +2092,9 @@ export function registerIpcHandlers(
 				process.platform,
 				sources,
 				{
-					waylandPortal: linuxPortalOwnsSources(
+					waylandPortal: await linuxPortalOwnsSources(
 						process.platform,
-						Boolean(findPipeWireCursorHelperPath()),
+						findPipeWireCursorHelperPath(),
 						process.env,
 					),
 				},
@@ -2244,7 +2245,7 @@ export function registerIpcHandlers(
 	ipcMain.handle("get-selected-source", async () => {
 		const previousSelectedSource = selectedSource;
 		if (
-			linuxPortalOwnsSources(process.platform, Boolean(findPipeWireCursorHelperPath()), process.env)
+			await linuxPortalOwnsSources(process.platform, findPipeWireCursorHelperPath(), process.env)
 		) {
 			selectedSource = null;
 			selectedDesktopSource = null;
@@ -2459,6 +2460,13 @@ export function registerIpcHandlers(
 		return access;
 	});
 
+	/** The selection the direct X11 backend records; the portal path takes none. */
+	async function linuxX11Source(): Promise<{ source?: NativeLinuxCaptureSource }> {
+		const helperPath = findPipeWireCursorHelperPath();
+		if (!helperPath || (await linuxCaptureBackend(helperPath, process.env)) !== "x11") return {};
+		return { source: resolveX11CaptureSource(selectedSource, screen.getAllDisplays()) };
+	}
+
 	ipcMain.handle("open-source-selector", async () => {
 		// Nothing to open on Wayland WHEN THE NATIVE HELPER IS THERE. The selector's
 		// own `desktopCapturer.getSources()` raises a portal dialog — a SECOND
@@ -2470,7 +2478,7 @@ export function registerIpcHandlers(
 		// DOES consume a source id, so the picker has to stay reachable there or
 		// that path could never start.
 		if (
-			linuxPortalOwnsSources(process.platform, Boolean(findPipeWireCursorHelperPath()), process.env)
+			await linuxPortalOwnsSources(process.platform, findPipeWireCursorHelperPath(), process.env)
 		) {
 			return { opened: false, reason: "portal-owns-selection" };
 		}
@@ -2623,7 +2631,12 @@ export function registerIpcHandlers(
 
 		const helperPath = findPipeWireCursorHelperPath();
 		return helperPath
-			? { success: true, available: true, helperPath, backend: linuxCaptureBackend(process.env) }
+			? {
+					success: true,
+					available: true,
+					helperPath,
+					backend: await linuxCaptureBackend(helperPath, process.env),
+				}
 			: { success: true, available: false, reason: "missing-helper" };
 	});
 
@@ -2663,9 +2676,7 @@ export function registerIpcHandlers(
 				await fs.mkdir(RECORDINGS_DIR, { recursive: true });
 
 				const session = new LinuxNativeCaptureSession({
-					...(linuxCaptureBackend(process.env) === "x11"
-						? { source: resolveX11CaptureSource(selectedSource, screen.getAllDisplays()) }
-						: {}),
+					...(await linuxX11Source()),
 					outputPath,
 					cursorMode: portalCursorMode(cursorCaptureMode),
 					fps: request.video.fps,
@@ -2752,9 +2763,7 @@ export function registerIpcHandlers(
 				const session =
 					prepared ??
 					new LinuxNativeCaptureSession({
-						...(linuxCaptureBackend(process.env) === "x11"
-							? { source: resolveX11CaptureSource(selectedSource, screen.getAllDisplays()) }
-							: {}),
+						...(await linuxX11Source()),
 						outputPath,
 						cursorMode: portalCursorMode(cursorCaptureMode),
 						fps: request.video.fps,
@@ -5150,7 +5159,7 @@ export function registerIpcHandlers(
 			broadcastSelectedSource(before.source);
 		};
 		if (
-			linuxPortalOwnsSources(process.platform, Boolean(findPipeWireCursorHelperPath()), process.env)
+			await linuxPortalOwnsSources(process.platform, findPipeWireCursorHelperPath(), process.env)
 		) {
 			// The portal asks the user once the take starts: nothing here to select.
 		} else {
